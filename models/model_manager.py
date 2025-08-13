@@ -196,10 +196,10 @@ class OpenSourceModelManager:
         if model_type in self._load_models:
             del self._load_models[model_type]
             torch.cuda.empty_cache() if torch.cuda.is_available() else None
-            print(f"✅ Unloaded {model_type} model")
+            print(f" Unloaded {model_type} model")
     
     def unload_all_models(self):
         """Unload all models to free memory."""
         self._loaded_models.clear()
         torch.cuda.empty_cache() if torch.cuda.is_available() else None
-        print("✅ All models unloaded")
+        print(" All models unloaded")
