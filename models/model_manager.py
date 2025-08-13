@@ -2,42 +2,42 @@
 
 import torch
 from typing import Dict, Any, Optional
-from transformers import (AutoTokenizer, 
-                          AutoModelForCausalLM, 
-                          AutoModelForTokenClassification,
-                          TokenClassificationPipeline, 
-                          pipeline,
-                          BitsAndBytesConfig)
+from transformers import (
+    AutoTokenizer,
+    AutoModelForCausalLM,
+    pipeline,
+    BitsAndBytesConfig
+)
 from sentence_transformers import SentenceTransformer
 from ..config import get_config
 
-class OpenSourceModelManager:
 
+class OpenSourceModelManager:
     def __init__(self, device: str = "auto"):
         self.config = get_config()
         self.device = device
         self._setup_device()
 
-        self._load_models = {}
+        # Store loaded models here
+        self._loaded_models = {}
 
-        print(f"using device: {self.device}")
+        print(f"Using device: {self.device}")
 
     def _setup_device(self):
-        """setup the best available device"""
+        """Setup the best available device"""
         if self.device == "auto":
             if torch.cuda.is_available():
                 self.device = "cuda"
                 print(f"CUDA available: {torch.cuda.get_device_name()}")
-            # elif hasattr(torch.backends, 'mps') -> if using apple silicon, code this up
+            # elif hasattr(torch.backends, 'mps'):  # Apple Silicon support can be added here
             else:
                 self.device = "cpu"
-                print("using CPU")
+                print("Using CPU")
 
-    def get_llm(self) ->  Dict[str, Any]:
-        """get model for text generation"""
-        if "llm" not in self._load_models:
+    def get_llm(self) -> Dict[str, Any]:
+        """Get model for text generation"""
+        if "llm" not in self._loaded_models:
             print("Loading language model...")
-
             try:
                 model_name = self.config.MODELS["llm"]["name"]
 
@@ -50,18 +50,18 @@ class OpenSourceModelManager:
                     )
                 else:
                     quantization_config = None
-                
-                tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side = "left")
+
+                tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left")
 
                 if tokenizer.pad_token is None:
-                    tokenizer.pad_token =  tokenizer.eos_token
+                    tokenizer.pad_token = tokenizer.eos_token
 
                 model = AutoModelForCausalLM.from_pretrained(
                     model_name,
                     quantization_config=quantization_config,
-                    device_map ="auto" if self.device == "cuda" else None,
-                    torch_dtype = torch.float16 if self.device == "cuda" else torch.float32,
-                    low_cpu_mem_usage = True
+                    device_map="auto" if self.device == "cuda" else None,
+                    torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
+                    low_cpu_mem_usage=True
                 )
 
                 if self.device != "cuda":
@@ -73,49 +73,50 @@ class OpenSourceModelManager:
                 }
 
                 print(f"Language model loaded: {model_name}")
-                
+
             except Exception as e:
                 print(f"Error loading main model, trying alternative: {e}")
                 self._load_fallback_llm()
-        
+
         return self._loaded_models["llm"]
-    
+
     def _load_fallback_llm(self):
         """Load fallback language model"""
         model_name = self.config.MODELS["llm"]["alternative"]
-        tokenizer =  AutoTokenizer.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
         model = AutoModelForCausalLM.from_pretrained(model_name)
-        model =  model.to(self.device)
+        model = model.to(self.device)
 
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
-        
+
         self._loaded_models["llm"] = {
             "model": model,
             "tokenizer": tokenizer
         }
         print(f"Fallback language model loaded: {model_name}")
-    
+
     def get_ner_pipeline(self):
         """Get NER pipeline for entity extraction."""
-        if "ner" not in self._load_models:
+        if "ner" not in self._loaded_models:
             print("Loading NER model...")
             try:
                 model_name = self.config.MODELS["ner"]["name"]
                 ner_pipeline = pipeline(
-                    model =  model_name,
-                    tokenizer = model_name,
-                    aggregation_strategy = "simple",
-                    device=0 if self.device=="cuda" else -1 
+                    "ner",  # Explicitly specify task
+                    model=model_name,
+                    tokenizer=model_name,
+                    aggregation_strategy="simple",
+                    device=0 if self.device == "cuda" else -1
                 )
-                self._load_models["ner"] = ner_pipeline
+                self._loaded_models["ner"] = ner_pipeline
                 print(f"NER model loaded: {model_name}")
             except Exception as e:
                 print(f"Error loading main NER model, trying alternative: {e}")
                 self._load_fallback_ner()
-        
+
         return self._loaded_models["ner"]
-    
+
     def _load_fallback_ner(self):
         """Load fallback NER model"""
         model_name = self.config.MODELS["ner"]["alternative"]
@@ -129,7 +130,8 @@ class OpenSourceModelManager:
         print(f"Fallback NER model loaded: {model_name}")
 
     def get_embeddings_model(self):
-        if "embeddings" not in self._load_models:
+        """Get embeddings model"""
+        if "embeddings" not in self._loaded_models:
             print("Loading embeddings model...")
             try:
                 model_name = self.config.MODELS["embeddings"]["name"]
@@ -139,9 +141,9 @@ class OpenSourceModelManager:
             except Exception as e:
                 print(f"Error loading embeddings model: {e}")
                 self._load_fallback_embeddings()
-        
+
         return self._loaded_models["embeddings"]
-    
+
     def _load_fallback_embeddings(self):
         """Load fallback embeddings model."""
         model_name = self.config.MODELS["embeddings"]["alternative"]
@@ -149,7 +151,7 @@ class OpenSourceModelManager:
         self._loaded_models["embeddings"] = embedder
         print(f"Fallback embeddings model loaded: {model_name}")
 
-    def generate_text(self, prompt: str, max_length: Optional[int] = None, temperature: Optional[float]=None) -> str:
+    def generate_text(self, prompt: str, max_length: Optional[int] = None, temperature: Optional[float] = None) -> str:
         """Generate text using the local LLM"""
         max_length = max_length or self.config.MAX_GENERATION_LENGTH
         temperature = temperature or self.config.GENERATION_TEMPERATURE
@@ -159,15 +161,15 @@ class OpenSourceModelManager:
         tokenizer = llm["tokenizer"]
 
         try:
-            # encode the prompt
-            inputs =  tokenizer.encode(prompt, return_tensor="pt", truncation=True, max_length=400)
+            # Encode the prompt
+            inputs = tokenizer.encode(prompt, return_tensors="pt", truncation=True, max_length=400)
             inputs = inputs.to(self.device)
 
             # Generate response
             with torch.no_grad():
                 outputs = model.generate(
                     inputs,
-                    max_length=min(max_length, inputs.shape[1]+200),
+                    max_length=min(max_length, inputs.shape[1] + 200),
                     temperature=temperature,
                     do_sample=temperature > 0,
                     pad_token_id=tokenizer.eos_token_id,
@@ -178,28 +180,30 @@ class OpenSourceModelManager:
             # Decode the response
             generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
 
-            # Extract only the new part -> remove the prompt()
+            # Extract only the new part -> remove the prompt
             response = generated_text[len(prompt):].strip()
 
             return response if response else "I need more context to provide a specific answer"
-        
+
         except Exception as e:
             print(f"Error generating text: {e}")
             return f"Error generating response: {str(e)}"
-        
+
     def get_loaded_models(self) -> list:
         """Get list of currently loaded models"""
-        return list(self._loaded_models.key())
-    
+        return list(self._loaded_models.keys())
+
     def unload_model(self, model_type: str):
         """Unload a specific model to free memory"""
-        if model_type in self._load_models:
-            del self._load_models[model_type]
-            torch.cuda.empty_cache() if torch.cuda.is_available() else None
-            print(f" Unloaded {model_type} model")
-    
+        if model_type in self._loaded_models:
+            del self._loaded_models[model_type]
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            print(f"Unloaded {model_type} model")
+
     def unload_all_models(self):
         """Unload all models to free memory."""
         self._loaded_models.clear()
-        torch.cuda.empty_cache() if torch.cuda.is_available() else None
-        print(" All models unloaded")
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        print("All models unloaded")
