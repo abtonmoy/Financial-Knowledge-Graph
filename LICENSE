@@ -1,0 +1,32 @@
+Business Source License 1.1 (BSL 1.1)
+
+Copyright (c) 2025 Abdul Basit Tonmoy
+
+Licensed Work: Financial Knowledge Graph
+Licensor: Abdul Basit Tonmoy
+Change Date: 2028-08-13
+
+---
+
+1. Definitions
+   a. "Licensor" means the individual or entity granting rights under this License.
+   b. "You" means any person or entity exercising rights under this License.
+   c. "Licensed Work" means the software, data, or documentation made available under this License.
+
+2. License Grant
+   a. You may use, modify, copy, and distribute the Licensed Work **for non-production purposes**.
+   b. You may contribute modifications back to the Licensor.
+
+3. Commercial Use Restriction
+   a. You **may not use the Licensed Work in production or commercial environments** prior to the Change Date.
+   b. After the Change Date, the Licensed Work is automatically made available under the Apache License 2.0.
+
+4. Redistribution
+   a. You must retain all copyright, patent, and trademark notices.
+   b. You must include this BSL License when distributing the Licensed Work.
+
+5. Disclaimer of Warranty
+   THE LICENSED WORK IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
+
+6. Limitation of Liability
+   IN NO EVENT SHALL THE LICENSOR BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM THE USE OF THE LICENSED WORK.
