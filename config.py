@@ -30,14 +30,14 @@ class Config:
     CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "50"))
 
     MAX_GENERATION_LENGTH = int(os.getenv("MAX_GEN_LENGTH", "512"))
-    GENERATION_TEMPERATURE = int(os.getenv('GEN_TEMPERATURE', '0.1'))
+    GENERATION_TEMPERATURE = float(os.getenv('GEN_TEMPERATURE', '0.1'))
 
     API_HOST = os.getenv("API_HOST", "0.0.0.0")
-    API_PORT = os.getenv("API_PORT", "8000")
+    API_PORT = int(os.getenv("API_PORT", "8000"))
 
     LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
 
-    FINANCIAL_PATHERNS = {
+    FINANCIAL_PATTERNS = {
         "MONEY": [
             r'\$[\d,]+\.?\d*',  # $1,000.00
             r'\d+\.?\d*\s*(?:dollars?|USD|usd)',  # 1000 dollars
@@ -56,11 +56,15 @@ class Config:
         ]
     }
 
-    NER_LEVEL_MAPPING = {
+    NER_LABEL_MAPPING = {
         "PER": "PERSON",
         "PERSON": "PERSON",
         "ORG": "COMPANY",
         "ORGANIZATION": "COMPANY",
         "MISC": "MISC",
-        "LOC": "LOCATION"
+        "LOC": "LOCATION",
+        "LOCATION": "LOCATION"
     }
+
+def get_config() -> Config:
+    return Config
