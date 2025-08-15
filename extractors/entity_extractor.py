@@ -125,5 +125,28 @@ class FinancialEntityExtractor:
         
         return properties
 
-    
+
+    def _mask_account_number(self, account_number: str) -> str:
+        if len(account_number) <= 4:
+            return '*' * len(account_number)
+        return '*' * (len(account_number) - 4) + account_number[-4:]
+
+    def _deduplicate_entities(self, entities: List[Entity]) -> List[Entity]:
+        sorted_entities = sorted(entities, key = lambda e: e.confidence, reverse=True)
+        final_entities = []    
         
+        for entity in sorted_entities:
+            overlaps = False
+            for accepted in final_entities:
+                if self._entities_overlap(entity, accepted):
+                    overlaps = True
+                    break
+
+            if not overlaps:
+                final_entities.append(entity)
+
+        return final_entities
+    
+    def _entities_overlap(self, entity1: Entity, entity2: Entity) -> bool:
+        return (entity1.position[0]< entity2.position[1] and 
+                entity1.position[1]>entity2.position[0])
