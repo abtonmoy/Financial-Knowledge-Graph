@@ -16,6 +16,7 @@ from ..utils.text_utils import TextProcessor
 from ..utils.audit_utils import AuditEngine
 from ..config import get_config
 
+
 class FinancialKGEngine:
     """Main engine that coordinates all components for financial knowledge graph processing."""
 
@@ -27,38 +28,38 @@ class FinancialKGEngine:
         # Initialize core components
         self.model_manager = OpenSourceModelManager(device)
         self.text_processor = TextProcessor()
-        
+
         # Initialize parsers
         self.parsers = {
-            'pdf': PDFParser(),
-            'excel': ExcelParser()
+            "pdf": PDFParser(),
+            "excel": ExcelParser(),
         }
-        
+
         # Initialize extractors
         self.entity_extractor = FinancialEntityExtractor(self.model_manager)
-        
+
         # Initialize storage
         self.knowledge_graph = SimpleKnowledgeGraph()
-        
+
         # Initialize RAG system
         self.rag_system = OpenSourceRAG(self.model_manager, self.knowledge_graph)
-        
+
         # Initialize audit engine
         self.audit_engine = AuditEngine(self.knowledge_graph)
-        
+
         print("Financial KG Engine ready!")
 
     def process_document(self, file_path: str, doc_id: Optional[str] = None) -> str:
         """
         Process a document end-to-end.
-        
+
         Args:
             file_path: Path to the document file
             doc_id: Optional document ID (auto-generated if not provided)
-            
+
         Returns:
             Document ID of the processed document
-            
+
         Raises:
             ValueError: If file type is not supported
             RuntimeError: If processing fails
@@ -73,37 +74,40 @@ class FinancialKGEngine:
             parser = self._get_parser_for_file(file_path)
             if not parser:
                 raise ValueError(f"Unsupported file type: {file_path}")
-            
+
             parsed = parser.parse(file_path)
-            print(f"Extracted {len(parsed['text'])} char of text")
+            text = parsed.get("text", "") or ""
+            print(f"Extracted {len(text)} char of text")
 
             # s2 -> extract entities from text
-            entities = self._entity_extractor.extract_entities(parsed['text'], doc_id)
+            # FIX: use self.entity_extractor (was self._entity_extractor)
+            entities = self.entity_extractor.extract_entities(text, doc_id)
             print(f"Extracted {len(entities)} entities")
 
-            # s3 -> extract entries from tables
-            tables = parsed.get('tables', [])
+            # s3 -> extract entities from tables
+            tables = parsed.get("tables", []) or []
             for table in tables:
                 table_entities = self.entity_extractor.extract_from_table(table, doc_id)
                 entities.extend(table_entities)
                 print(f"Extracted {len(table_entities)} entities from table")
-            
+
             # s4 -> create document obj
             document = Document.create(
                 filename=Path(file_path).name,
-                file_type=Path(file_path).suffix,
-                text_content=parsed['text'],
-                tables=parsed['tables'],
-                metadata=parsed.get('metadata', {})
+                # store extension without leading dot for consistency
+                file_type=Path(file_path).suffix.lstrip(".").lower(),
+                text_content=text,
+                tables=tables,
+                metadata=parsed.get("metadata", {}) or {},
             )
             document.id = doc_id
             document.entities = entities
 
-            # s5 -> store in kg
+            # s5 -> store in KG
             success = self.knowledge_graph.add_document(document=document)
             if not success:
                 raise RuntimeError("Failed to store document in KG")
-            
+
             # store entities
             for entity in entities:
                 self.knowledge_graph.add_entity(entity)
@@ -111,107 +115,117 @@ class FinancialKGEngine:
             # add to vector store for RAG
             self.rag_system.add_document_to_vector_store(document)
             print(f"Document processed successfully: {doc_id}")
+
+            # FIX: actually return the doc_id as per signature/docstring
+            return doc_id
+
         except Exception as e:
             print(f"Error processing document: {e}")
             raise RuntimeError(f"Document processing failed: {e}")
-    
+
     def _get_parser_for_file(self, file_path: str):
         """
         Get the appropriate parser for a file.
-        
+
         Args:
             file_path: Path to the file
-            
+
         Returns:
             Parser instance or None if no suitable parser found
         """
         for parser in self.parsers.values():
-            if parser.supports_file_type(file_path):
-                return parser
+            try:
+                if parser.supports_file_type(file_path):
+                    return parser
+            except Exception:
+                # Ignore individual parser errors during capability check
+                continue
         return None
-    
-    def get_entities(self, 
-                    entity_type: Optional[str] = None, 
-                    source_doc: Optional[str] = None,
-                    limit: int = 100) -> List[Dict]:
+
+    def get_entities(
+        self,
+        entity_type: Optional[str] = None,
+        source_doc: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict]:
         """
         Get entities from the knowledge graph.
-        
+
         Args:
             entity_type: Filter by entity type
             source_doc: Filter by source document
             limit: Maximum number of entities to return
-            
+
         Returns:
             List of entity dictionaries
         """
         return self.knowledge_graph.query_entities(
-            entity_type=entity_type,
-            source_doc=source_doc,
-            limit=limit
+            entity_type=entity_type, source_doc=source_doc, limit=limit
         )
-    
+
     def get_document_by_id(self, doc_id: str) -> Optional[Dict]:
         """
         Get a document by its ID.
-        
+
         Args:
             doc_id: Document ID
-            
+
         Returns:
             Document dictionary or None if not found
         """
         return self.knowledge_graph.get_document_by_id(doc_id)
-    
+
     def get_entity_by_id(self, entity_id: str) -> Optional[Dict]:
         """
         Get an entity by its ID.
-        
+
         Args:
             entity_id: Entity ID
-            
+
         Returns:
             Entity dictionary or None if not found
         """
         return self.knowledge_graph.get_entity_by_id(entity_id)
-    
+
     def get_related_entities(self, entity_id: str) -> List[Dict]:
         """
         Get entities related to a given entity.
-        
+
         Args:
             entity_id: ID of the entity to find relations for
-            
+
         Returns:
             List of related entities
         """
         return self.knowledge_graph.query_related_entities(entity_id)
-    
+
     def run_audit(self) -> List[AuditIssue]:
         """
         Run audit checks on the knowledge base.
-        
+
         Returns:
             List of audit issues found
         """
         print("Running audit checks...")
-        
+
         try:
             issues = self.audit_engine.run_all_checks()
             print(f"Audit completed. Found {len(issues)} issues.")
             return issues
         except Exception as e:
             print(f"Error running audit: {e}")
-            return [AuditIssue(
-                type="audit_error",
-                severity="high",
-                description=f"Audit failed: {str(e)}"
-            )]
-    
+            return [
+                AuditIssue(
+                    type="audit_error",
+                    severity="high",
+                    description=f"Audit failed: {str(e)}",
+                )
+            ]
+
     def get_statistics(self) -> Dict[str, Any]:
         """
         Get statistics about the knowledge graph.
-        
+
         Returns:
             Dictionary with various statistics
         """
@@ -219,28 +233,28 @@ class FinancialKGEngine:
         vector_stats = self.rag_system.get_vector_store_stats()
         model_stats = {
             "loaded_models": self.model_manager.get_loaded_models(),
-            "device": self.model_manager.device
+            "device": self.model_manager.device,
         }
-        
+
         return {
             "knowledge_graph": kg_stats,
             "vector_store": vector_stats,
-            "models": model_stats
+            "models": model_stats,
         }
-    
+
     def clear_all_data(self) -> bool:
         """
         Clear all data from the knowledge graph and vector store.
-        
+
         Returns:
             True if successful
         """
         print("Clearing all data...")
-        
+
         try:
             kg_cleared = self.knowledge_graph.clear_all_data()
             vector_cleared = self.rag_system.clear_vector_store()
-            
+
             if kg_cleared and vector_cleared:
                 print("All data cleared successfully")
                 return True
@@ -250,82 +264,95 @@ class FinancialKGEngine:
         except Exception as e:
             print(f"Error clearing data: {e}")
             return False
-    
+
     def export_entities(self, file_path: str, entity_type: Optional[str] = None) -> bool:
         """
         Export entities to a JSON file.
-        
+
         Args:
             file_path: Path to save the export file
             entity_type: Optional entity type filter
-            
+
         Returns:
             True if successful
         """
         try:
             import json
-            
+
             entities = self.get_entities(entity_type=entity_type, limit=10000)
-            
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump({
-                    "export_timestamp": datetime.now().isoformat(),
-                    "entity_type_filter": entity_type,
-                    "total_entities": len(entities),
-                    "entities": entities
-                }, f, indent=2, ensure_ascii=False)
-            
+
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "export_timestamp": datetime.now().isoformat(),
+                        "entity_type_filter": entity_type,
+                        "total_entities": len(entities),
+                        "entities": entities,
+                    },
+                    f,
+                    indent=2,
+                    ensure_ascii=False,
+                )
+
             print(f"Exported {len(entities)} entities to {file_path}")
             return True
-            
+
         except Exception as e:
             print(f"Error exporting entities: {e}")
             return False
-    
+
     def health_check(self) -> Dict[str, Any]:
         """
         Perform a health check of all system components.
-        
+
         Returns:
             Dictionary with health status of each component
         """
         health = {
             "overall_status": "healthy",
-            "components": {}
+            "components": {},
         }
-        
+
         try:
             # Check model manager
             loaded_models = self.model_manager.get_loaded_models()
             health["components"]["model_manager"] = {
                 "status": "healthy",
                 "loaded_models": loaded_models,
-                "device": self.model_manager.device
+                "device": self.model_manager.device,
             }
         except Exception as e:
             health["components"]["model_manager"] = {"status": "error", "error": str(e)}
             health["overall_status"] = "degraded"
-        
+
         try:
             # Check knowledge graph
             kg_stats = self.knowledge_graph.get_statistics()
             health["components"]["knowledge_graph"] = {
                 "status": "healthy",
-                "stats": kg_stats
+                "stats": kg_stats,
             }
         except Exception as e:
             health["components"]["knowledge_graph"] = {"status": "error", "error": str(e)}
             health["overall_status"] = "degraded"
-        
+
         try:
             # Check vector store
             vector_stats = self.rag_system.get_vector_store_stats()
-            health["components"]["vector_store"] = {
-                "status": "healthy",
-                "stats": vector_stats
-            }
+            # If vector store returns an error, mark degraded
+            if isinstance(vector_stats, dict) and "error" in vector_stats:
+                health["components"]["vector_store"] = {
+                    "status": "error",
+                    "error": vector_stats["error"],
+                }
+                health["overall_status"] = "degraded"
+            else:
+                health["components"]["vector_store"] = {
+                    "status": "healthy",
+                    "stats": vector_stats,
+                }
         except Exception as e:
             health["components"]["vector_store"] = {"status": "error", "error": str(e)}
             health["overall_status"] = "degraded"
-        
+
         return health
