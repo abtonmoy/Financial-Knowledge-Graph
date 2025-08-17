@@ -92,8 +92,8 @@ class ModelStatusResponse(BaseModel):
 class ExportRequest(BaseModel):
     """Request schema for data export."""
     entity_type: Optional[str] = None
-    format: str = Field("json", regex="^(json|csv)$")
     include_metadata: bool = True
+    format: str = Field("json", pattern="^(json|csv)$")
 
 class ClearDataRequest(BaseModel):
     """Request schema for clearing data."""

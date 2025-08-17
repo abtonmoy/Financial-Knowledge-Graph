@@ -356,3 +356,21 @@ class FinancialKGEngine:
             health["overall_status"] = "degraded"
 
         return health
+    
+
+    def ask_question(self, question: str, top_k: int = 5) -> QueryResult:
+        """
+        Ask a natural language question using the RAG system.
+
+        Args:
+            question: The question string
+            top_k: Number of top documents/entities to consider
+
+        Returns:
+            QueryResult object with answer and sources
+        """
+        if not self.rag_system:
+            raise RuntimeError("RAG system is not initialized")
+
+        result = self.rag_system.query(question, top_k=top_k)
+        return result

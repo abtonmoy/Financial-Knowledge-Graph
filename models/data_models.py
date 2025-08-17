@@ -9,9 +9,9 @@ import uuid
 class Entity:
     """Represents an entity in the knowledge graph."""
 
-    id: str = field(default_factory=lambda: str(uuid.uuid4()))
     type: str  # PERSON, COMPANY, AMOUNT, DATE, ACCOUNT
     text: str
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
     confidence: Optional[float] = None
     source_doc: str = ""
     position: Tuple[int, int] = (0, 0)  # start, end
@@ -29,9 +29,9 @@ class Entity:
     ) -> "Entity":
         """Create a new entity with auto-generated ID."""
         return cls(
-            id=str(uuid.uuid4()),
             type=entity_type,
             text=text,
+            id=str(uuid.uuid4()),
             confidence=confidence,
             source_doc=source_doc,
             position=position,
@@ -42,12 +42,13 @@ class Entity:
 @dataclass
 class Relationship:
     """Represents a relationship between entities."""
-    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+
     source_entity_id: str
     target_entity_id: str
     type: str  # OWNS, PAYS, TRANSFERS_TO, etc.
     confidence: float
     source_doc: str
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
     properties: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -62,12 +63,12 @@ class Relationship:
     ) -> "Relationship":
         """Create a new relationship with auto-generated ID."""
         return cls(
-            id=str(uuid.uuid4()),
             source_entity_id=source_entity_id,
             target_entity_id=target_entity_id,
             type=relationship_type,
             confidence=confidence,
             source_doc=source_doc,
+            id=str(uuid.uuid4()),
             properties=properties or {}
         )
 
@@ -76,10 +77,10 @@ class Relationship:
 class Document:
     """Represents a processed document."""
 
-    id: str = field(default_factory=lambda: str(uuid.uuid4()))
     filename: str
     file_type: str
     text_content: str
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
     tables: List[Dict[str, Any]] = field(default_factory=list)
     entities: List[Entity] = field(default_factory=list)
     relationships: List[Relationship] = field(default_factory=list)
@@ -110,7 +111,7 @@ class QueryResult:
     """Result of a RAG query."""
 
     answer: str
-    sources: Dict[str, Any]  # Renamed from 'source' to match usage in .create()
+    sources: Dict[str, Any]
     metadata: Dict[str, Any]
     confidence: Optional[float] = None
 
@@ -140,7 +141,7 @@ class AuditIssue:
     """Represents an audit issue found in the data."""
 
     type: str
-    severity: Literal["low", "medium", "high"]  # Restricted to valid values
+    severity: Literal["low", "medium", "high"]
     description: str
     entities: List[str] = field(default_factory=list)
     recommendations: List[str] = field(default_factory=list)
