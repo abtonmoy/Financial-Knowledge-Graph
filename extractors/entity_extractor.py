@@ -104,8 +104,24 @@ class FinancialEntityExtractor:
                     properties['amount'] = amount
                     properties['currency'] = 'USD'  # Default assumption
                     properties['formatted_amount'] = text
+                    
+                    # CHANGE: Add amount categorization for better analysis
+                    if amount < 100:
+                        properties['amount_category'] = 'small'
+                    elif amount < 1000:
+                        properties['amount_category'] = 'medium'
+                    elif amount < 10000:
+                        properties['amount_category'] = 'large'
+                    else:
+                        properties['amount_category'] = 'very_large'
+                        
+                    # CHANGE: Add readable amount for display
+                    properties['readable_amount'] = f"${amount:,.2f}"
+                    
                 except ValueError:
-                    pass
+                    # CHANGE: Add fallback parsing for malformed amounts
+                    properties['parsing_error'] = True
+                    properties['raw_text'] = text
         
         elif entity_type == "PERCENTAGE":
             numbers = re.findall(r'\d+\.?\d*', text)
@@ -114,8 +130,19 @@ class FinancialEntityExtractor:
                     percentage = float(numbers[0])
                     properties['percentage'] = percentage
                     properties['decimal_value'] = percentage / 100.0
+                    
+                    # CHANGE: Add percentage categorization
+                    if percentage < 1:
+                        properties['percentage_category'] = 'very_low'
+                    elif percentage < 5:
+                        properties['percentage_category'] = 'low'
+                    elif percentage < 15:
+                        properties['percentage_category'] = 'medium'
+                    else:
+                        properties['percentage_category'] = 'high'
+                        
                 except ValueError:
-                    pass
+                    properties['parsing_error'] = True
         
         elif entity_type == "ACCOUNT_NUMBER":
             # Clean account number
@@ -124,12 +151,27 @@ class FinancialEntityExtractor:
                 properties['clean_number'] = clean_number
                 properties['length'] = len(clean_number)
                 properties['masked_number'] = self._mask_account_number(clean_number)
+                
+                # CHANGE: Add account number validation
+                if 8 <= len(clean_number) <= 20:
+                    properties['is_valid_length'] = True
+                    properties['validation_status'] = 'valid'
+                else:
+                    properties['is_valid_length'] = False
+                    properties['validation_status'] = 'invalid_length'
         
         elif entity_type == "ROUTING_NUMBER":
             clean_number = re.sub(r'[^\d]', '', text)
             if len(clean_number) == 9:
                 properties['clean_number'] = clean_number
                 properties['is_valid_length'] = True
+                properties['validation_status'] = 'valid'
+            else:
+                # CHANGE: Add more detailed validation feedback
+                properties['clean_number'] = clean_number
+                properties['is_valid_length'] = False
+                properties['validation_status'] = f'invalid_length_{len(clean_number)}_digits'
+                properties['expected_length'] = 9
         
         return properties
     
@@ -180,8 +222,10 @@ class FinancialEntityExtractor:
             for i, header in enumerate(table_data['headers']):
                 header_entities = self._extract_pattern_entities(str(header), doc_id)
                 for entity in header_entities:
+                    # CHANGE: Add more detailed table context information
                     entity.properties['source'] = 'table_header'
                     entity.properties['column_index'] = i
+                    entity.properties['table_context'] = 'header'
                 entities.extend(header_entities)
         
         # Extract from structured data
@@ -192,9 +236,26 @@ class FinancialEntityExtractor:
                         if value is not None:
                             value_entities = self._extract_pattern_entities(str(value), doc_id)
                             for entity in value_entities:
+                                # CHANGE: Add comprehensive table metadata
                                 entity.properties['source'] = 'table_cell'
                                 entity.properties['row_index'] = row_idx
                                 entity.properties['column_name'] = col_name
+                                entity.properties['table_context'] = 'data_cell'
+                                
+                                # CHANGE: Add table-specific amount context
+                                if entity.type == 'MONEY':
+                                    entity.properties['table_column'] = col_name
+                                    # Try to infer what this amount represents from column name
+                                    col_lower = str(col_name).lower()
+                                    if any(word in col_lower for word in ['balance', 'total', 'amount']):
+                                        entity.properties['amount_type'] = 'balance_or_total'
+                                    elif any(word in col_lower for word in ['payment', 'debit', 'withdrawal']):
+                                        entity.properties['amount_type'] = 'outgoing'
+                                    elif any(word in col_lower for word in ['deposit', 'credit', 'income']):
+                                        entity.properties['amount_type'] = 'incoming'
+                                    else:
+                                        entity.properties['amount_type'] = 'unspecified'
+                                        
                             entities.extend(value_entities)
         
         return self._deduplicate_entities(entities)

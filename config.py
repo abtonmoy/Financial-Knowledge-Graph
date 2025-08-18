@@ -7,7 +7,8 @@ class Config:
 
     MODELS = {
         "llm": {
-            "name": 'HuggingFaceH4/zephyr-7b-beta',#"microsoft/DialoGPT-medium",
+            "name": "microsoft/DialoGPT-medium",
+            #'HuggingFaceH4/zephyr-7b-beta',
             "alternative": "microsoft/DialoGPT-small"
         },
         "ner": {

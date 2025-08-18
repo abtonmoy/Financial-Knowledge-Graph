@@ -232,6 +232,121 @@ class SimpleKnowledgeGraph:
         
         conn.close()
         return results
+
+    # CHANGE: Add new method for querying amounts with ordering
+    def query_money_entities_by_amount(self, 
+                                     order: str = 'DESC',
+                                     limit: int = 100,
+                                     source_doc: Optional[str] = None) -> List[Dict]:
+        """
+        Query MONEY entities ordered by their amount value.
+        
+        Args:
+            order: 'ASC' for ascending, 'DESC' for descending
+            limit: Maximum number of results
+            source_doc: Optional filter by source document
+            
+        Returns:
+            List of money entities ordered by amount
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Get all money entities first
+        query = "SELECT * FROM entities WHERE type = 'MONEY'"
+        params = []
+        
+        if source_doc:
+            query += " AND source_doc = ?"
+            params.append(source_doc)
+        
+        cursor.execute(query, params)
+        columns = [desc[0] for desc in cursor.description]
+        results = []
+        
+        for row in cursor.fetchall():
+            entity_dict = dict(zip(columns, row))
+            # Parse JSON properties
+            if entity_dict['properties']:
+                try:
+                    entity_dict['properties'] = json.loads(entity_dict['properties'])
+                except:
+                    entity_dict['properties'] = {}
+            else:
+                entity_dict['properties'] = {}
+            
+            # Only include entities with valid amount values
+            if 'amount' in entity_dict['properties']:
+                try:
+                    amount = float(entity_dict['properties']['amount'])
+                    entity_dict['_sort_amount'] = amount  # Add for sorting
+                    results.append(entity_dict)
+                except (ValueError, TypeError):
+                    continue
+        
+        # Sort by amount
+        reverse_order = (order.upper() == 'DESC')
+        results.sort(key=lambda x: x['_sort_amount'], reverse=reverse_order)
+        
+        # Remove the temporary sort key and limit results
+        for result in results[:limit]:
+            result.pop('_sort_amount', None)
+        
+        conn.close()
+        return results[:limit]
+
+    # CHANGE: Add method to get amount statistics
+    def get_amount_statistics(self, source_doc: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get statistical information about monetary amounts.
+        
+        Args:
+            source_doc: Optional filter by source document
+            
+        Returns:
+            Dictionary with amount statistics
+        """
+        money_entities = self.query_entities(entity_type="MONEY", source_doc=source_doc, limit=10000)
+        amounts = []
+        
+        for entity in money_entities:
+            properties = entity.get('properties', {})
+            if 'amount' in properties:
+                try:
+                    amount = float(properties['amount'])
+                    amounts.append(amount)
+                except (ValueError, TypeError):
+                    continue
+        
+        if not amounts:
+            return {
+                "total_money_entities": len(money_entities),
+                "parseable_amounts": 0,
+                "statistics": None
+            }
+        
+        amounts.sort()
+        stats = {
+            "total_money_entities": len(money_entities),
+            "parseable_amounts": len(amounts),
+            "min_amount": min(amounts),
+            "max_amount": max(amounts),
+            "sum_amount": sum(amounts),
+            "avg_amount": sum(amounts) / len(amounts),
+        }
+        
+        # Add median
+        n = len(amounts)
+        if n % 2 == 0:
+            stats["median_amount"] = (amounts[n//2 - 1] + amounts[n//2]) / 2
+        else:
+            stats["median_amount"] = amounts[n//2]
+        
+        # Add percentiles
+        stats["percentile_25"] = amounts[int(0.25 * n)]
+        stats["percentile_75"] = amounts[int(0.75 * n)]
+        
+        return stats
     
     def query_related_entities(self, entity_id: str, max_depth: int = 2) -> List[Dict]:
         """
@@ -382,6 +497,10 @@ class SimpleKnowledgeGraph:
         
         cursor.execute('SELECT file_type, COUNT(*) FROM documents GROUP BY file_type')
         stats['documents_by_type'] = dict(cursor.fetchall())
+        
+        # CHANGE: Add amount statistics to general stats
+        amount_stats = self.get_amount_statistics()
+        stats['amount_statistics'] = amount_stats
         
         conn.close()
         return stats

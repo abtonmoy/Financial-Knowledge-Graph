@@ -81,30 +81,15 @@ class OpenSourceRAG:
         print(f"Answering: {question}")
 
         try:
-            # s1 -> Vector Search for relevant document chunks
-            vector_results = self._retrieve_documents(question, top_k)
-
-            # s2 -> Extract entities from the question
-            question_entities = self._extract_question_entities(question)
-
-            # s3 -> Search KG for relevant facts
-            graph_facts = self._retrieve_graph_facts(question_entities)
-
-            # s4 -> Generate answer using local LLM
-            context = self._prepare_context(vector_results, graph_facts)
-            answer = self._generate_answer_local(question, context)
-
-            docs_first = self._safe_first(vector_results.get("documents"))
-            return QueryResult.create(
-                answer=answer,
-                documents=docs_first,
-                graph_facts=graph_facts,
-                metadata={
-                    "question_entities": question_entities,
-                    "vector_results_count": len(docs_first),
-                    "graph_facts_count": len(graph_facts)
-                }
-            )
+            # CHANGE: Add specialized query detection and handling
+            query_type = self._detect_query_type(question)
+            
+            if query_type == "comparative_amount":
+                return self._handle_comparative_amount_query(question)
+            elif query_type == "specific_entity":
+                return self._handle_specific_entity_query(question)
+            else:
+                return self._handle_general_query(question, top_k)
 
         except Exception as e:
             print(f"Error in RAG query: {e}")
@@ -112,6 +97,214 @@ class OpenSourceRAG:
                 answer=f"I encountered an error processing your question: {str(e)}",
                 metadata={"error": str(e)}
             )
+
+    # CHANGE: Add new method to detect different query types
+    def _detect_query_type(self, question: str) -> str:
+        """
+        Detect the type of query to determine the best approach.
+        
+        Args:
+            question: User question
+            
+        Returns:
+            Query type string
+        """
+        question_lower = question.lower()
+        
+        # Comparative queries about amounts
+        comparative_keywords = ["highest", "maximum", "largest", "biggest", "most", "greatest", "top"]
+        amount_keywords = ["amount", "total", "sum", "value", "cost", "price", "money", "payment"]
+        
+        if any(comp in question_lower for comp in comparative_keywords) and any(amt in question_lower for amt in amount_keywords):
+            return "comparative_amount"
+        
+        # Specific entity lookups
+        entity_keywords = ["account", "company", "person", "name", "number"]
+        if any(entity in question_lower for entity in entity_keywords):
+            return "specific_entity"
+        
+        return "general"
+
+    # CHANGE: Add specialized handler for comparative amount queries
+    def _handle_comparative_amount_query(self, question: str) -> QueryResult:
+        """
+        Handle queries asking for highest/maximum amounts by examining all MONEY entities.
+        
+        Args:
+            question: User question
+            
+        Returns:
+            QueryResult with the highest amount found
+        """
+        try:
+            # Get all MONEY entities from knowledge graph
+            money_entities = self.knowledge_graph.query_entities(entity_type="MONEY", limit=1000)
+            
+            if not money_entities:
+                return QueryResult.create(
+                    answer="I couldn't find any monetary amounts in the processed documents.",
+                    metadata={"query_type": "comparative_amount", "entities_found": 0}
+                )
+            
+            # Extract amounts and find the highest
+            amounts_with_context = []
+            for entity in money_entities:
+                try:
+                    properties = entity.get('properties', {})
+                    if isinstance(properties, str):
+                        import json
+                        properties = json.loads(properties)
+                    
+                    amount = properties.get('amount')
+                    if amount is not None:
+                        amounts_with_context.append({
+                            'amount': float(amount),
+                            'text': entity.get('text', ''),
+                            'formatted': properties.get('formatted_amount', entity.get('text', '')),
+                            'entity_id': entity.get('id', '')
+                        })
+                except (ValueError, TypeError, KeyError):
+                    continue
+            
+            if not amounts_with_context:
+                return QueryResult.create(
+                    answer="I found monetary amounts but couldn't parse their numerical values for comparison.",
+                    metadata={"query_type": "comparative_amount", "unparseable_entities": len(money_entities)}
+                )
+            
+            # Find the highest amount
+            highest_amount_info = max(amounts_with_context, key=lambda x: x['amount'])
+            
+            # Create detailed answer
+            answer = f"The highest amount in the statement is {highest_amount_info['formatted']} (${highest_amount_info['amount']:,.2f})."
+            
+            # Add context about other significant amounts if there are multiple
+            if len(amounts_with_context) > 1:
+                sorted_amounts = sorted(amounts_with_context, key=lambda x: x['amount'], reverse=True)
+                if len(sorted_amounts) >= 3:
+                    second_highest = sorted_amounts[1]
+                    third_highest = sorted_amounts[2]
+                    answer += f" Other significant amounts include {second_highest['formatted']} and {third_highest['formatted']}."
+            
+            return QueryResult.create(
+                answer=answer,
+                documents=[f"Found {len(amounts_with_context)} monetary amounts"],
+                metadata={
+                    "query_type": "comparative_amount",
+                    "highest_amount": highest_amount_info['amount'],
+                    "total_amounts_found": len(amounts_with_context),
+                    "all_amounts": [amt['amount'] for amt in sorted(amounts_with_context, key=lambda x: x['amount'], reverse=True)[:5]]
+                }
+            )
+            
+        except Exception as e:
+            return QueryResult.create(
+                answer=f"Error analyzing amounts: {str(e)}",
+                metadata={"error": str(e), "query_type": "comparative_amount"}
+            )
+
+    # CHANGE: Add specialized handler for specific entity queries
+    def _handle_specific_entity_query(self, question: str) -> QueryResult:
+        """
+        Handle queries looking for specific entities like account numbers, company names.
+        
+        Args:
+            question: User question
+            
+        Returns:
+            QueryResult with specific entity information
+        """
+        try:
+            # Extract potential entity types from question
+            question_lower = question.lower()
+            target_types = []
+            
+            if "account" in question_lower:
+                target_types.append("ACCOUNT_NUMBER")
+            if "company" in question_lower or "organization" in question_lower:
+                target_types.append("COMPANY")
+            if "person" in question_lower or "name" in question_lower:
+                target_types.append("PERSON")
+            
+            if not target_types:
+                target_types = ["PERSON", "COMPANY", "ACCOUNT_NUMBER"]  # Default fallback
+            
+            # Get entities of the target types
+            all_entities = []
+            for entity_type in target_types:
+                entities = self.knowledge_graph.query_entities(entity_type=entity_type, limit=100)
+                all_entities.extend(entities)
+            
+            if not all_entities:
+                return QueryResult.create(
+                    answer="I couldn't find the specific information you're looking for in the processed documents.",
+                    metadata={"query_type": "specific_entity", "searched_types": target_types}
+                )
+            
+            # Format the response
+            entity_info = []
+            for entity in all_entities[:10]:  # Limit to prevent overwhelming response
+                entity_text = entity.get('text', '')
+                entity_type = entity.get('type', '')
+                entity_info.append(f"{entity_type}: {entity_text}")
+            
+            answer = f"I found the following relevant information: {', '.join(entity_info[:5])}"
+            if len(entity_info) > 5:
+                answer += f" and {len(entity_info) - 5} more entries."
+            
+            return QueryResult.create(
+                answer=answer,
+                documents=[f"Found {len(all_entities)} relevant entities"],
+                metadata={
+                    "query_type": "specific_entity",
+                    "entity_types_found": target_types,
+                    "total_entities": len(all_entities)
+                }
+            )
+            
+        except Exception as e:
+            return QueryResult.create(
+                answer=f"Error searching for specific entities: {str(e)}",
+                metadata={"error": str(e), "query_type": "specific_entity"}
+            )
+
+    # CHANGE: Rename and improve the general query handler
+    def _handle_general_query(self, question: str, top_k: int) -> QueryResult:
+        """
+        Handle general queries using the original RAG approach but with improvements.
+        
+        Args:
+            question: User question
+            top_k: Number of top documents to retrieve
+            
+        Returns:
+            QueryResult with answer and sources
+        """
+        # s1 -> Vector Search for relevant document chunks
+        vector_results = self._retrieve_documents(question, top_k)
+
+        # s2 -> Extract entities from the question (improved)
+        question_entities = self._extract_question_entities_improved(question)
+
+        # s3 -> Search KG for relevant facts
+        graph_facts = self._retrieve_graph_facts(question_entities)
+
+        # s4 -> Generate answer using local LLM (improved context)
+        context = self._prepare_context_improved(question, vector_results, graph_facts)
+        answer = self._generate_answer_local(question, context)
+
+        docs_first = self._safe_first(vector_results.get("documents"))
+        return QueryResult.create(
+            answer=answer,
+            documents=docs_first,
+            graph_facts=graph_facts,
+            metadata={
+                "query_type": "general",
+                "question_entities": question_entities,
+                "vector_results_count": len(docs_first),
+                "graph_facts_count": len(graph_facts)
+            }
+        )
 
     def get_vector_store_stats(self) -> Dict[str, Any]:
         """
@@ -214,23 +407,35 @@ class OpenSourceRAG:
                     break
         return unique_facts
 
-    def _extract_question_entities(self, question: str) -> List[str]:
+    # CHANGE: Improved question entity extraction with financial keywords
+    def _extract_question_entities_improved(self, question: str) -> List[str]:
         """
-        Extract potential entities from the question.
+        Extract potential entities from the question with improved financial keyword detection.
 
         Args:
-            question
+            question: User question
 
         Returns:
             List of potential entity strings
         """
         entities: List[str] = []
 
+        # CHANGE: Add financial keyword detection first
+        financial_keywords = [
+            "amount", "total", "sum", "balance", "payment", "cost", "price", "value",
+            "money", "cash", "funds", "account", "transaction", "fee", "charge",
+            "deposit", "withdrawal", "transfer", "statement", "bill", "invoice"
+        ]
+        
+        question_lower = question.lower()
+        for keyword in financial_keywords:
+            if keyword in question_lower:
+                entities.append(keyword)
+
         # Capture capitalized tokens (robust to hyphens/apostrophes)
-        # e.g., "New York", "O'Neill", "Model-3"
         for token in question.split():
             token_stripped = token.strip(",.;:!?()[]{}\"'")
-            if len(token_stripped) > 2 and token_stripped[0].isupper() and re.match(r"^[A-Za-z0-9'’-]+$", token_stripped):
+            if len(token_stripped) > 2 and token_stripped[0].isupper() and re.match(r"^[A-Za-z0-9'â€™-]+$", token_stripped):
                 entities.append(token_stripped)
 
         # Financial patterns
@@ -251,11 +456,13 @@ class OpenSourceRAG:
                 deduped.append(e)
         return deduped
 
-    def _prepare_context(self, vector_results: Dict[str, Any], graph_facts: List[Dict]) -> str:
+    # CHANGE: Improved context preparation with question-aware content selection
+    def _prepare_context_improved(self, question: str, vector_results: Dict[str, Any], graph_facts: List[Dict]) -> str:
         """
-        Prepare context for the LLM from retrieved information.
+        Prepare context for the LLM with question-aware improvements.
 
         Args:
+            question: Original question for context
             vector_results: Results from vector search
             graph_facts: Facts from knowledge graph
 
@@ -264,24 +471,46 @@ class OpenSourceRAG:
         """
         context_parts: List[str] = []
 
-        # add document excerpts
+        # CHANGE: Add question context at the beginning
+        question_lower = question.lower()
+        
+        # add document excerpts with smarter selection
         docs_first = self._safe_first(vector_results.get("documents"))
         if docs_first:
             context_parts.append("Document Information:")
-            for doc in docs_first[:3]:  # Limiting context
-                doc_excerpt = doc[:200] + "..." if len(doc) > 200 else doc
+            
+            # CHANGE: For amount-related questions, prioritize content with dollar signs
+            if any(word in question_lower for word in ["amount", "total", "money", "cost", "price", "highest", "maximum"]):
+                # Sort documents by relevance to monetary content
+                monetary_docs = []
+                other_docs = []
+                
+                for doc in docs_first:
+                    if '$' in doc or any(money_word in doc.lower() for money_word in ["amount", "total", "payment", "balance"]):
+                        monetary_docs.append(doc)
+                    else:
+                        other_docs.append(doc)
+                
+                # Prioritize monetary content
+                relevant_docs = (monetary_docs + other_docs)[:3]
+            else:
+                relevant_docs = docs_first[:3]
+            
+            for doc in relevant_docs:
+                # CHANGE: Increase context length for financial queries
+                doc_excerpt = doc[:400] + "..." if len(doc) > 400 else doc
                 context_parts.append(f"- {doc_excerpt}")
             context_parts.append("")
 
-        # add graph facts
+        # add graph facts with better formatting
         if graph_facts:
             context_parts.append("Related Financial Data:")
-            for fact in graph_facts[:5]:  # Limit to avoid graph context overflow
+            for fact in graph_facts[:5]:
                 fact_text = f"{fact.get('type', 'Entity')}: {fact.get('text', 'Unknown')}"
                 props = fact.get("properties")
                 if isinstance(props, dict):
                     key_props = []
-                    for key in ["amount", "percentage", "masked_number"]:
+                    for key in ["amount", "percentage", "masked_number", "formatted_amount"]:
                         if key in props:
                             key_props.append(f"{key}: {props[key]}")
                     if key_props:
@@ -301,25 +530,46 @@ class OpenSourceRAG:
         Returns:
             Generated answer
         """
-        # Create a focused prompt for financial Q&A
-        prompt_template = (
-            "Context: {context}\n\n"
-            "Question: {question}\n\n"
-            "Based on the provided context, please answer the question about financial information. "
-            "Be specific and cite relevant details from the context. If the context doesn't contain "
-            "enough information, say so clearly.\n\n"
-            "Answer:\n"
-        )
+        # CHANGE: Create question-type-aware prompts
+        question_lower = question.lower()
+        
+        if any(word in question_lower for word in ["highest", "maximum", "largest", "most", "greatest"]):
+            # Comparative prompt
+            prompt_template = (
+                "Context: {context}\n\n"
+                "Question: {question}\n\n"
+                "You are analyzing financial data. The question asks for a comparison to find the highest/maximum value. "
+                "Look through the context for all monetary amounts (marked with $ or mentioned as amounts) and identify "
+                "which one is the largest. Provide the specific amount and any relevant details.\n\n"
+                "Answer:\n"
+            )
+        elif any(word in question_lower for word in ["total", "sum", "add"]):
+            # Calculation prompt
+            prompt_template = (
+                "Context: {context}\n\n"
+                "Question: {question}\n\n"
+                "You are analyzing financial data. The question asks for a calculation or total. "
+                "Look through the context for relevant amounts and perform the requested calculation. "
+                "Show your work if possible.\n\n"
+                "Answer:\n"
+            )
+        else:
+            # General prompt
+            prompt_template = (
+                "Context: {context}\n\n"
+                "Question: {question}\n\n"
+                "Based on the provided context, please answer the question about financial information. "
+                "Be specific and cite relevant details from the context. If the context doesn't contain "
+                "enough information, say so clearly.\n\n"
+                "Answer:\n"
+            )
 
-        # FIX: use named placeholders
         prompt = prompt_template.format(context=context, question=question)
 
         # keep prompt reasonable length for local models
-        max_total_len = 1000
+        max_total_len = 1200  # CHANGE: Increased from 1000 for better context
         if len(prompt) > max_total_len:
-            # Truncate context while keeping question and instruction
-            # Allow at least 200 chars for question/instructions
-            reserved_for_non_context = min(400, len(prompt) - len(context))  # conservative reserve
+            reserved_for_non_context = min(500, len(prompt) - len(context))
             max_context_len = max(0, max_total_len - reserved_for_non_context)
             truncated_context = (context[:max_context_len] + "\n[context truncated...]") if len(context) > max_context_len else context
             prompt = prompt_template.format(context=truncated_context, question=question)
