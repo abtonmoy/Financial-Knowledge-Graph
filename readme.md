@@ -24,6 +24,73 @@ An open financial document processing system that extracts entities and relation
 
 ![Document Processing](/assests/query.gif)
 
+## System Architecture
+
+                    ┌─────────────────────────────────────────────────────────────────┐
+                    │                    Processing Engine                            │
+                    ├─────────────────────────────────────────────────────────────────┤
+                    │ • Model Loading & Management                                    │
+                    │ • Pipeline Orchestration                                        │
+                    │ • Memory Management                                             │
+                    │ • Error Handling & Recovery                                     │
+                    │ • Configuration Management                                      │
+                    └─────────────────────────────────────────────────────────────────┘
+                                                        │
+                                                        ▼
+                    ┌─────────────────────────────────────────────────────────────────┐
+                    │                    Document Parsers                             │
+                    ├─────────────────────────────────────────────────────────────────┤
+                    │ PDF Parser                  │  Excel Parser                     │
+                    │ ├─ Text Extraction         │  ├─ Sheet Processing               │
+                    │ ├─ Table Detection         │  ├─ Financial Data Detection       │
+                    │ ├─ Metadata Extraction     │  ├─ Cell Type Recognition          │
+                    │ └─ Structure Analysis      │  └─ Formula Extraction             │
+                    └─────────────────────────────────────────────────────────────────┘
+                                                        │
+                                                        ▼
+                    ┌─────────────────────────────────────────────────────────────────┐
+                    │                    Entity Extraction                            │
+                    ├─────────────────────────────────────────────────────────────────┤
+                    │ NER Models                  │  Pattern Matching                 │
+                    │ ├─ BERT-based Models       │  ├─ Financial Regex                │
+                    │ ├─ Token Classification    │  ├─ Account Numbers                │
+                    │ ├─ Confidence Scoring      │  ├─ Currency Detection             │
+                    │ └─ Entity Properties       │  └─ Date/Time Patterns             │
+                    └─────────────────────────────────────────────────────────────────┘
+                                                        │
+                                                        ▼
+                    ┌─────────────────────────────────────────────────────────────────┐
+                    │                 Relationship Extraction                         │
+                    ├─────────────────────────────────────────────────────────────────┤
+                    │ Rule-based        │ Table-based      │ LLM-powered │ Proximity  │
+                    │ ├─ Pattern Rules  │ ├─ Row Analysis  │ ├─ Context  │ ├─ Distance│
+                    │ ├─ Financial      │ ├─ Column        │ ├─ Semantic │ ├─ Co-occur│
+                    │ │  Logic          │ │  Relationships │ │  Analysis │ │  Analysis│
+                    │ └─ Domain Rules   │ └─ Cell Links    │ └─ Generate │ └─ Scoring │
+                    └─────────────────────────────────────────────────────────────────┘
+                                                        │
+                                                        ▼
+                    ┌─────────────────────────────────────────────────────────────────┐
+                    │                    Knowledge Graph Storage                      │
+                    ├─────────────────────────────────────────────────────────────────┤
+                    │ SQLite Database                                                 │
+                    │ ├─ Entities Table (id, type, text, confidence, properties)      │
+                    │ ├─ Relationships Table (id, source, target, type, confidence)   │
+                    │ ├─ Documents Table (id, filename, content, metadata)            │
+                    │ └─ Indexes (entity_type, relationship_type, confidence)         │
+                    └─────────────────────────────────────────────────────────────────┘
+                                                        │
+                                                        ▼
+                    ┌─────────────────────────────────────────────────────────────────┐
+                    │                       RAG System                                │
+                    ├─────────────────────────────────────────────────────────────────┤
+                    │ Vector Store (ChromaDB)     │  Query Processing                 │
+                    │ ├─ Document Embeddings     │  ├─ Question Analysis              │
+                    │ ├─ Semantic Search         │  ├─ Intent Recognition             │
+                    │ ├─ Similarity Matching     │  ├─ Handler Selection              │
+                    │ └─ Retrieval Scoring       │  └─ Response Generation            │
+                    └─────────────────────────────────────────────────────────────────┘
+
 ## Requirements
 
 ### System Requirements
