@@ -37,7 +37,7 @@ The system uses open-source models and libraries:
 1. **Clone the repository**:
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/abtonmoy/Financial-Knowledge-Graph.git
 cd financial-knowledge-graph
 ```
 
@@ -297,17 +297,13 @@ python -m financial_kg.main test
 - Adjust chunk sizes based on document complexity
 - Configure model quantization for memory efficiency
 
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests for new functionality
-5. Submit a pull request
-
 ## License
 
-[Add your license information here]
+Business Source License 1.1 (BSL 1.1)
+
+## Developer
+
+- Abdul Basit Tonmoy
 
 ## Acknowledgments
 
