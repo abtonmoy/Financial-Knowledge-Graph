@@ -14,6 +14,16 @@ An open financial document processing system that extracts entities and relation
 - **Audit System**: Built-in data quality checks and validation
 - **Vector Store**: ChromaDB integration for semantic search
 
+## Demo
+
+### Document Processing:
+
+![Document Processing](/assests/document_processing.gif)
+
+### Query:
+
+![Document Processing](/assests/query.gif)
+
 ## Requirements
 
 ### System Requirements
