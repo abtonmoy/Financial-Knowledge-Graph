@@ -1,16 +1,18 @@
-"""FastAPI routes for the Financial Knowledge Graph API."""
+"""FastAPI routes for the Financial Knowledge Graph API with relationship support."""
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Query
 from pathlib import Path
 from typing import Optional, List
 import tempfile
 import os
+from datetime import datetime
 
 from .schemas import (
     QueryRequest, QueryResponse, EntityFilter, EntityResponse,
     DocumentResponse, AuditResponse, StatisticsResponse,
     HealthStatus, UploadResponse, ModelStatusResponse,
-    ExportRequest, ClearDataRequest, ErrorResponse
+    ExportRequest, ClearDataRequest, ErrorResponse,
+    RelationshipResponse  # New schema for relationships
 )
 from ..engine.processing_engine import FinancialKGEngine
 
@@ -114,6 +116,35 @@ async def get_entities(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error retrieving entities: {str(e)}")
 
+@router.get("/relationships", response_model=RelationshipResponse)
+async def get_relationships(
+    relationship_type: Optional[str] = Query(None, description="Filter by relationship type"),
+    source_entity_id: Optional[str] = Query(None, description="Filter by source entity ID"),
+    target_entity_id: Optional[str] = Query(None, description="Filter by target entity ID"),
+    source_doc: Optional[str] = Query(None, description="Filter by source document ID"),
+    min_confidence: Optional[float] = Query(None, ge=0.0, le=1.0, description="Minimum confidence threshold"),
+    limit: int = Query(100, ge=1, le=1000, description="Maximum number of relationships to return")
+) -> RelationshipResponse:
+    """Get relationships from the knowledge graph."""
+    current_engine = get_engine()
+    
+    try:
+        relationships = current_engine.get_relationships(
+            relationship_type=relationship_type,
+            source_entity_id=source_entity_id,
+            target_entity_id=target_entity_id,
+            source_doc=source_doc,
+            limit=limit
+        )
+        
+        return RelationshipResponse(
+            relationships=relationships,
+            count=len(relationships),
+            total_available=None  # Could implement total count if needed
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error retrieving relationships: {str(e)}")
+
 @router.get("/entities/{entity_id}")
 async def get_entity_by_id(entity_id: str):
     """Get a specific entity by ID."""
@@ -142,6 +173,27 @@ async def get_related_entities(entity_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error retrieving related entities: {str(e)}")
 
+@router.get("/entities/{entity_id}/relationships")
+async def get_entity_relationships(entity_id: str):
+    """Get all relationships for a specific entity."""
+    current_engine = get_engine()
+    
+    try:
+        # Get relationships where this entity is the source
+        outgoing = current_engine.get_relationships(source_entity_id=entity_id)
+        
+        # Get relationships where this entity is the target
+        incoming = current_engine.get_relationships(target_entity_id=entity_id)
+        
+        return {
+            "entity_id": entity_id,
+            "outgoing_relationships": outgoing,
+            "incoming_relationships": incoming,
+            "total_relationships": len(outgoing) + len(incoming)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error retrieving entity relationships: {str(e)}")
+
 @router.get("/documents/{doc_id}", response_model=DocumentResponse)
 async def get_document_by_id(doc_id: str) -> DocumentResponse:
     """Get a specific document by ID."""
@@ -153,8 +205,9 @@ async def get_document_by_id(doc_id: str) -> DocumentResponse:
         if not document:
             return DocumentResponse(document=None, found=False)
         
-        # Count entities for this document
+        # Count entities and relationships for this document
         entities = current_engine.get_entities(source_doc=doc_id)
+        relationships = current_engine.get_relationships(source_doc=doc_id)
         
         from datetime import datetime
         doc_info = {
@@ -163,12 +216,47 @@ async def get_document_by_id(doc_id: str) -> DocumentResponse:
             "file_type": document["file_type"],
             "processed_at": datetime.fromisoformat(document["processed_at"]),
             "entity_count": len(entities),
+            "relationship_count": len(relationships),
             "metadata": document.get("metadata", {})
         }
         
         return DocumentResponse(document=doc_info, found=True)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error retrieving document: {str(e)}")
+
+@router.get("/documents/{doc_id}/graph")
+async def get_document_graph(doc_id: str):
+    """Get the complete knowledge graph for a specific document."""
+    current_engine = get_engine()
+    
+    try:
+        document = current_engine.get_document_by_id(doc_id)
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        entities = current_engine.get_entities(source_doc=doc_id)
+        relationships = current_engine.get_relationships(source_doc=doc_id)
+        
+        return {
+            "document_id": doc_id,
+            "document_info": {
+                "filename": document["filename"],
+                "file_type": document["file_type"],
+                "processed_at": document["processed_at"]
+            },
+            "entities": entities,
+            "relationships": relationships,
+            "graph_summary": {
+                "total_entities": len(entities),
+                "total_relationships": len(relationships),
+                "entity_types": list(set(e.get('type') for e in entities)),
+                "relationship_types": list(set(r.get('type') for r in relationships))
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error retrieving document graph: {str(e)}")
 
 @router.post("/audit", response_model=AuditResponse)
 async def run_audit() -> AuditResponse:
@@ -280,6 +368,70 @@ async def export_entities(request: ExportRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error exporting entities: {str(e)}")
 
+@router.post("/export/graph")
+async def export_full_graph(request: ExportRequest):
+    """Export the complete knowledge graph (entities and relationships)."""
+    current_engine = get_engine()
+    
+    try:
+        import tempfile
+        import json
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix=f'.{request.format}', delete=False) as temp_file:
+            temp_path = temp_file.name
+            
+            # Get all entities and relationships
+            entities = current_engine.get_entities(entity_type=request.entity_type, limit=10000)
+            relationships = current_engine.get_relationships(limit=10000)
+            
+            # Export data
+            export_data = {
+                "export_timestamp": datetime.now().isoformat(),
+                "entity_type_filter": request.entity_type,
+                "total_entities": len(entities),
+                "total_relationships": len(relationships),
+                "entities": entities,
+                "relationships": relationships,
+                "graph_statistics": current_engine.get_statistics()["knowledge_graph"]
+            }
+            
+            if request.format.lower() == 'json':
+                json.dump(export_data, temp_file, indent=2, ensure_ascii=False, default=str)
+            elif request.format.lower() == 'csv':
+                # For CSV, we'll export entities and relationships separately
+                import csv
+                import io
+                
+                output = io.StringIO()
+                
+                # Write entities
+                if entities:
+                    output.write("=== ENTITIES ===\n")
+                    entity_writer = csv.DictWriter(output, fieldnames=entities[0].keys())
+                    entity_writer.writeheader()
+                    entity_writer.writerows(entities)
+                
+                # Write relationships
+                if relationships:
+                    output.write("\n=== RELATIONSHIPS ===\n")
+                    rel_writer = csv.DictWriter(output, fieldnames=relationships[0].keys())
+                    rel_writer.writeheader()
+                    rel_writer.writerows(relationships)
+                
+                temp_file.write(output.getvalue())
+            
+            temp_file.flush()
+            
+            return {
+                "export_path": temp_path,
+                "status": "success",
+                "entities_exported": len(entities),
+                "relationships_exported": len(relationships)
+            }
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error exporting graph: {str(e)}")
+
 @router.post("/admin/clear")
 async def clear_all_data(request: ClearDataRequest):
     """Clear all data from the system (admin only)."""
@@ -303,12 +455,14 @@ async def clear_all_data(request: ClearDataRequest):
 async def list_documents(
     limit: int = Query(50, ge=1, le=500, description="Maximum number of documents to return")
 ):
-    """List all processed documents."""
+    """List all processed documents with entity and relationship counts."""
     current_engine = get_engine()
     
     try:
-        # Get all entities to find unique documents
+        # Get all entities and relationships to find unique documents
         all_entities = current_engine.get_entities(limit=10000)
+        all_relationships = current_engine.get_relationships(limit=10000)
+        
         doc_ids = list(set(e.get('source_doc') for e in all_entities if e.get('source_doc')))
         
         documents = []
@@ -316,18 +470,56 @@ async def list_documents(
             doc = current_engine.get_document_by_id(doc_id)
             if doc:
                 entity_count = len([e for e in all_entities if e.get('source_doc') == doc_id])
+                relationship_count = len([r for r in all_relationships if r.get('source_doc') == doc_id])
+                
                 documents.append({
                     "id": doc["id"],
                     "filename": doc["filename"],
                     "file_type": doc["file_type"],
                     "processed_at": doc["processed_at"],
-                    "entity_count": entity_count
+                    "entity_count": entity_count,
+                    "relationship_count": relationship_count
                 })
         
-        return {"documents": documents, "count": len(documents), "total_available": len(doc_ids)}
+        return {
+            "documents": documents, 
+            "count": len(documents), 
+            "total_available": len(doc_ids)
+        }
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error listing documents: {str(e)}")
+
+@router.get("/graph/summary")
+async def get_graph_summary():
+    """Get a high-level summary of the knowledge graph."""
+    current_engine = get_engine()
+    
+    try:
+        stats = current_engine.get_statistics()["knowledge_graph"]
+        
+        # Get some sample entities and relationships for preview
+        sample_entities = current_engine.get_entities(limit=5)
+        sample_relationships = current_engine.get_relationships(limit=5)
+        
+        return {
+            "statistics": stats,
+            "sample_entities": sample_entities,
+            "sample_relationships": sample_relationships,
+            "graph_health": {
+                "entities_with_relationships": len([e for e in sample_entities if any(
+                    r.get('source_entity_id') == e.get('id') or r.get('target_entity_id') == e.get('id')
+                    for r in sample_relationships
+                )]),
+                "isolated_entities": len([e for e in sample_entities if not any(
+                    r.get('source_entity_id') == e.get('id') or r.get('target_entity_id') == e.get('id')
+                    for r in sample_relationships
+                )])
+            }
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting graph summary: {str(e)}")
 
 def set_engine(app_engine: FinancialKGEngine):
     """Set the global engine instance."""

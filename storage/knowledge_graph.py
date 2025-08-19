@@ -1,4 +1,4 @@
-"""SQLite-based knowledge graph storage."""
+"""SQLite-based knowledge graph storage with relationship support."""
 
 import sqlite3
 import json
@@ -7,7 +7,7 @@ from ..models.data_models import Entity, Relationship, Document
 from ..config import get_config
 
 class SimpleKnowledgeGraph:
-    """A simple knowledge graph implementation using SQLite."""
+    """A simple knowledge graph implementation using SQLite with enhanced relationship support."""
     
     def __init__(self, db_path: Optional[str] = None):
         self.config = get_config()
@@ -67,8 +67,11 @@ class SimpleKnowledgeGraph:
         # Create indexes for better performance
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(type)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_entities_doc ON entities(source_doc)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_entities_text ON entities(text)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_relationships_source ON relationships(source_entity_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_relationships_target ON relationships(target_entity_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_relationships_type ON relationships(type)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_relationships_doc ON relationships(source_doc)')
         
         conn.commit()
         conn.close()
@@ -233,7 +236,85 @@ class SimpleKnowledgeGraph:
         conn.close()
         return results
 
-    # CHANGE: Add new method for querying amounts with ordering
+    def query_relationships(self, 
+                          relationship_type: Optional[str] = None,
+                          source_entity_id: Optional[str] = None,
+                          target_entity_id: Optional[str] = None,
+                          source_doc: Optional[str] = None,
+                          min_confidence: Optional[float] = None,
+                          limit: int = 100) -> List[Dict]:
+        """
+        Query relationships from the graph with various filters.
+        
+        Args:
+            relationship_type: Filter by relationship type
+            source_entity_id: Filter by source entity ID
+            target_entity_id: Filter by target entity ID
+            source_doc: Filter by source document
+            min_confidence: Minimum confidence threshold
+            limit: Maximum number of results
+            
+        Returns:
+            List of relationship dictionaries
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Join with entities to get entity details
+        query = '''
+            SELECT r.*, 
+                   se.text as source_entity_text, se.type as source_entity_type,
+                   te.text as target_entity_text, te.type as target_entity_type
+            FROM relationships r
+            LEFT JOIN entities se ON r.source_entity_id = se.id
+            LEFT JOIN entities te ON r.target_entity_id = te.id
+            WHERE 1=1
+        '''
+        params = []
+        
+        if relationship_type:
+            query += ' AND r.type = ?'
+            params.append(relationship_type)
+        
+        if source_entity_id:
+            query += ' AND r.source_entity_id = ?'
+            params.append(source_entity_id)
+        
+        if target_entity_id:
+            query += ' AND r.target_entity_id = ?'
+            params.append(target_entity_id)
+        
+        if source_doc:
+            query += ' AND r.source_doc = ?'
+            params.append(source_doc)
+        
+        if min_confidence is not None:
+            query += ' AND r.confidence >= ?'
+            params.append(min_confidence)
+        
+        query += ' ORDER BY r.confidence DESC LIMIT ?'
+        params.append(limit)
+        
+        cursor.execute(query, params)
+        
+        columns = [desc[0] for desc in cursor.description]
+        results = []
+        
+        for row in cursor.fetchall():
+            rel_dict = dict(zip(columns, row))
+            # Parse JSON properties
+            if rel_dict['properties']:
+                try:
+                    rel_dict['properties'] = json.loads(rel_dict['properties'])
+                except:
+                    rel_dict['properties'] = {}
+            else:
+                rel_dict['properties'] = {}
+            results.append(rel_dict)
+        
+        conn.close()
+        return results
+
     def query_money_entities_by_amount(self, 
                                      order: str = 'DESC',
                                      limit: int = 100,
@@ -295,7 +376,6 @@ class SimpleKnowledgeGraph:
         conn.close()
         return results[:limit]
 
-    # CHANGE: Add method to get amount statistics
     def get_amount_statistics(self, source_doc: Optional[str] = None) -> Dict[str, Any]:
         """
         Get statistical information about monetary amounts.
@@ -350,7 +430,7 @@ class SimpleKnowledgeGraph:
     
     def query_related_entities(self, entity_id: str, max_depth: int = 2) -> List[Dict]:
         """
-        Find entities related to a given entity.
+        Find entities related to a given entity through relationships.
         
         Args:
             entity_id: ID of the entity to find relations for
@@ -362,17 +442,21 @@ class SimpleKnowledgeGraph:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # Direct relationships (depth 1)
+        # Get direct relationships with entity details
         cursor.execute('''
             SELECT e.*, r.type as relationship_type, r.confidence as rel_confidence,
+                   r.id as relationship_id,
                    CASE 
                        WHEN r.source_entity_id = ? THEN 'outgoing'
                        ELSE 'incoming'
-                   END as direction
+                   END as direction,
+                   r.properties as relationship_properties
             FROM entities e
-            JOIN relationships r ON (e.id = r.target_entity_id OR e.id = r.source_entity_id)
-            WHERE (r.source_entity_id = ? OR r.target_entity_id = ?)
-            AND e.id != ?
+            JOIN relationships r ON (
+                (e.id = r.target_entity_id AND r.source_entity_id = ?) OR
+                (e.id = r.source_entity_id AND r.target_entity_id = ?)
+            )
+            WHERE e.id != ?
             ORDER BY r.confidence DESC
         ''', (entity_id, entity_id, entity_id, entity_id))
         
@@ -389,10 +473,72 @@ class SimpleKnowledgeGraph:
                     entity_dict['properties'] = {}
             else:
                 entity_dict['properties'] = {}
+                
+            # Parse relationship properties
+            if entity_dict['relationship_properties']:
+                try:
+                    entity_dict['relationship_properties'] = json.loads(entity_dict['relationship_properties'])
+                except:
+                    entity_dict['relationship_properties'] = {}
+            else:
+                entity_dict['relationship_properties'] = {}
+                
             results.append(entity_dict)
         
         conn.close()
         return results
+
+    def get_relationship_statistics(self, source_doc: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get statistics about relationships in the graph.
+        
+        Args:
+            source_doc: Optional filter by source document
+            
+        Returns:
+            Dictionary with relationship statistics
+        """
+        relationships = self.query_relationships(source_doc=source_doc, limit=10000)
+        
+        stats = {
+            "total_relationships": len(relationships),
+            "relationships_by_type": {},
+            "relationships_by_extraction_method": {},
+            "average_confidence": 0.0,
+            "confidence_distribution": {"high": 0, "medium": 0, "low": 0}
+        }
+        
+        if not relationships:
+            return stats
+        
+        # Analyze relationship types
+        for rel in relationships:
+            rel_type = rel.get('type', 'UNKNOWN')
+            stats['relationships_by_type'][rel_type] = stats['relationships_by_type'].get(rel_type, 0) + 1
+            
+            # Analyze extraction methods
+            properties = rel.get('properties', {})
+            methods = properties.get('extraction_methods', [properties.get('extraction_method', 'unknown')])
+            if not isinstance(methods, list):
+                methods = [methods]
+            
+            for method in methods:
+                stats['relationships_by_extraction_method'][method] = stats['relationships_by_extraction_method'].get(method, 0) + 1
+            
+            # Confidence analysis
+            confidence = rel.get('confidence', 0.0)
+            if confidence >= 0.7:
+                stats['confidence_distribution']['high'] += 1
+            elif confidence >= 0.4:
+                stats['confidence_distribution']['medium'] += 1
+            else:
+                stats['confidence_distribution']['low'] += 1
+        
+        # Calculate average confidence
+        total_confidence = sum(rel.get('confidence', 0.0) for rel in relationships)
+        stats['average_confidence'] = total_confidence / len(relationships) if relationships else 0.0
+        
+        return stats
     
     def get_entity_by_id(self, entity_id: str) -> Optional[Dict]:
         """
@@ -467,7 +613,7 @@ class SimpleKnowledgeGraph:
     
     def get_statistics(self) -> Dict[str, Any]:
         """
-        Get database statistics.
+        Get comprehensive database statistics.
         
         Returns:
             Dictionary with various statistics
@@ -498,11 +644,12 @@ class SimpleKnowledgeGraph:
         cursor.execute('SELECT file_type, COUNT(*) FROM documents GROUP BY file_type')
         stats['documents_by_type'] = dict(cursor.fetchall())
         
-        # CHANGE: Add amount statistics to general stats
-        amount_stats = self.get_amount_statistics()
-        stats['amount_statistics'] = amount_stats
-        
         conn.close()
+        
+        # Add additional statistics
+        stats['amount_statistics'] = self.get_amount_statistics()
+        stats['relationship_statistics'] = self.get_relationship_statistics()
+        
         return stats
     
     def delete_entity(self, entity_id: str) -> bool:

@@ -10,6 +10,7 @@ from ..models.data_models import Document, QueryResult, AuditIssue
 from ..parsers.pdf_parser import PDFParser
 from ..parsers.excel_parser import ExcelParser
 from ..extractors.entity_extractor import FinancialEntityExtractor
+from ..extractors.relationship_extractor import HybridRelationshipExtractor
 from ..storage.knowledge_graph import SimpleKnowledgeGraph
 from ..rag.generator import OpenSourceRAG
 from ..utils.text_utils import TextProcessor
@@ -37,6 +38,7 @@ class FinancialKGEngine:
 
         # Initialize extractors
         self.entity_extractor = FinancialEntityExtractor(self.model_manager)
+        self.relationship_extractor = HybridRelationshipExtractor(self.model_manager)
 
         # Initialize storage
         self.knowledge_graph = SimpleKnowledgeGraph()
@@ -70,31 +72,38 @@ class FinancialKGEngine:
         print(f"Processing Document: {file_path}")
 
         try:
-            # s1 -> Determine parser and parse document
+            # Step 1: Determine parser and parse document
             parser = self._get_parser_for_file(file_path)
             if not parser:
                 raise ValueError(f"Unsupported file type: {file_path}")
 
             parsed = parser.parse(file_path)
             text = parsed.get("text", "") or ""
-            print(f"Extracted {len(text)} char of text")
-
-            # s2 -> extract entities from text
-            # FIX: use self.entity_extractor (was self._entity_extractor)
-            entities = self.entity_extractor.extract_entities(text, doc_id)
-            print(f"Extracted {len(entities)} entities")
-
-            # s3 -> extract entities from tables
             tables = parsed.get("tables", []) or []
+            print(f"Extracted {len(text)} characters of text and {len(tables)} tables")
+
+            # Step 2: Extract entities from text
+            entities = self.entity_extractor.extract_entities(text, doc_id)
+            print(f"Extracted {len(entities)} entities from text")
+
+            # Step 3: Extract entities from tables
             for table in tables:
                 table_entities = self.entity_extractor.extract_from_table(table, doc_id)
                 entities.extend(table_entities)
                 print(f"Extracted {len(table_entities)} entities from table")
 
-            # s4 -> create document obj
+            # Step 4: Extract relationships using hybrid approach
+            relationships = self.relationship_extractor.extract_relationships(
+                entities=entities,
+                text=text,
+                doc_id=doc_id,
+                tables=tables
+            )
+            print(f"Extracted {len(relationships)} relationships")
+
+            # Step 5: Create document object
             document = Document.create(
                 filename=Path(file_path).name,
-                # store extension without leading dot for consistency
                 file_type=Path(file_path).suffix.lstrip(".").lower(),
                 text_content=text,
                 tables=tables,
@@ -102,21 +111,25 @@ class FinancialKGEngine:
             )
             document.id = doc_id
             document.entities = entities
+            document.relationships = relationships
 
-            # s5 -> store in KG
+            # Step 6: Store in knowledge graph
             success = self.knowledge_graph.add_document(document=document)
             if not success:
                 raise RuntimeError("Failed to store document in KG")
 
-            # store entities
+            # Store entities
             for entity in entities:
                 self.knowledge_graph.add_entity(entity)
 
-            # add to vector store for RAG
+            # Store relationships
+            for relationship in relationships:
+                self.knowledge_graph.add_relationship(relationship)
+
+            # Add to vector store for RAG
             self.rag_system.add_document_to_vector_store(document)
             print(f"Document processed successfully: {doc_id}")
 
-            # FIX: actually return the doc_id as per signature/docstring
             return doc_id
 
         except Exception as e:
@@ -161,6 +174,35 @@ class FinancialKGEngine:
         """
         return self.knowledge_graph.query_entities(
             entity_type=entity_type, source_doc=source_doc, limit=limit
+        )
+
+    def get_relationships(
+        self,
+        relationship_type: Optional[str] = None,
+        source_entity_id: Optional[str] = None,
+        target_entity_id: Optional[str] = None,
+        source_doc: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict]:
+        """
+        Get relationships from the knowledge graph.
+
+        Args:
+            relationship_type: Filter by relationship type
+            source_entity_id: Filter by source entity
+            target_entity_id: Filter by target entity
+            source_doc: Filter by source document
+            limit: Maximum number of relationships to return
+
+        Returns:
+            List of relationship dictionaries
+        """
+        return self.knowledge_graph.query_relationships(
+            relationship_type=relationship_type,
+            source_entity_id=source_entity_id,
+            target_entity_id=target_entity_id,
+            source_doc=source_doc,
+            limit=limit
         )
 
     def get_document_by_id(self, doc_id: str) -> Optional[Dict]:
@@ -280,6 +322,7 @@ class FinancialKGEngine:
             import json
 
             entities = self.get_entities(entity_type=entity_type, limit=10000)
+            relationships = self.get_relationships(limit=10000)
 
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(
@@ -287,14 +330,16 @@ class FinancialKGEngine:
                         "export_timestamp": datetime.now().isoformat(),
                         "entity_type_filter": entity_type,
                         "total_entities": len(entities),
+                        "total_relationships": len(relationships),
                         "entities": entities,
+                        "relationships": relationships,
                     },
                     f,
                     indent=2,
                     ensure_ascii=False,
                 )
 
-            print(f"Exported {len(entities)} entities to {file_path}")
+            print(f"Exported {len(entities)} entities and {len(relationships)} relationships to {file_path}")
             return True
 
         except Exception as e:

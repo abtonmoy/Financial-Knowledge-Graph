@@ -1,4 +1,4 @@
-"""Pydantic schemas for API requests and responses."""
+"""Pydantic schemas for API requests and responses with relationship support."""
 
 from pydantic import BaseModel, Field
 from typing import Dict, List, Any, Optional
@@ -29,6 +29,21 @@ class EntityResponse(BaseModel):
     count: int
     total_available: Optional[int] = None
 
+class RelationshipFilter(BaseModel):
+    """Filter parameters for relationship queries."""
+    relationship_type: Optional[str] = None
+    source_entity_id: Optional[str] = None
+    target_entity_id: Optional[str] = None
+    source_doc: Optional[str] = None
+    min_confidence: Optional[float] = Field(None, ge=0.0, le=1.0)
+    limit: int = Field(100, ge=1, le=1000)
+
+class RelationshipResponse(BaseModel):
+    """Response schema for relationship queries."""
+    relationships: List[Dict[str, Any]]
+    count: int
+    total_available: Optional[int] = None
+
 class DocumentInfo(BaseModel):
     """Document information schema."""
     id: str
@@ -36,6 +51,7 @@ class DocumentInfo(BaseModel):
     file_type: str
     processed_at: datetime
     entity_count: int
+    relationship_count: Optional[int] = 0
     metadata: Dict[str, Any]
 
 class DocumentResponse(BaseModel):
@@ -100,3 +116,25 @@ class ClearDataRequest(BaseModel):
     confirm: bool = Field(..., description="Must be true to confirm data deletion")
     clear_vector_store: bool = True
     clear_knowledge_graph: bool = True
+
+class GraphSummaryResponse(BaseModel):
+    """Response schema for graph summary."""
+    statistics: Dict[str, Any]
+    sample_entities: List[Dict[str, Any]]
+    sample_relationships: List[Dict[str, Any]]
+    graph_health: Dict[str, Any]
+
+class EntityRelationshipsResponse(BaseModel):
+    """Response schema for entity relationships."""
+    entity_id: str
+    outgoing_relationships: List[Dict[str, Any]]
+    incoming_relationships: List[Dict[str, Any]]
+    total_relationships: int
+
+class DocumentGraphResponse(BaseModel):
+    """Response schema for document knowledge graph."""
+    document_id: str
+    document_info: Dict[str, Any]
+    entities: List[Dict[str, Any]]
+    relationships: List[Dict[str, Any]]
+    graph_summary: Dict[str, Any]
